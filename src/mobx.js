@@ -78,25 +78,23 @@ class MessageStore {
     this._addMessage = addMessage;
   }
 
-  messageReceived({ id, user, content }) {
-    this.fetchUser(user).then(action(_user => {
-      this.messages.set(id, new Message({
-        id,
-        content,
-        user: createUser(_user),
+  addMessageInCache({ messages, message, userId }) {
+    this.fetchUser(userId).then(action(user => {
+      messages.set(message.id, new Message({
+        id: message.id,
+        content: message.content,
+        user: createUser(user),
       }));
     }));
   }
 
+  messageReceived({ id, user, content }) {
+    this.addMessageInCache({ messages: this.messages, message: { id, content }, userId: user });
+  }
+
   addMessage({ userId, content }) {
     this._addMessage({ userId, content }).then(action(message => {
-      this.fetchUser(userId).then(action(user => {
-        this.messages.set(message.id, new Message({
-          id: message.id,
-          content,
-          user: createUser(user),
-        }));
-      }));
+      this.addMessageInCache({ messages: this.messages, message, userId });
     }));
   }
 
@@ -120,6 +118,7 @@ decorate(MessageStore, {
   fetchMessages: action,
   messageReceived: action,
   addMessage: action,
+  addMessageInCache: action,
   fetchMessagesSuccess: action.bound,
 });
 

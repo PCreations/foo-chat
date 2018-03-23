@@ -7,6 +7,35 @@ import { fetchUser, fetchMessages, addMessage } from './db';
 
 const cache = new InMemoryCache();
 
+const addMessageInCache = async({ cache, message, userId }) => {
+  const query = gql `
+    query {
+      messages @client {
+        id
+        content,
+        user {
+          id
+          username
+        }
+      }
+    }
+  `;
+  const previous = cache.readQuery({ query });
+  const newMessage = {
+    ...message,
+    user: {
+      ...await fetchUser(userId),
+      __typename: 'User'
+    },
+    __typename: 'Message'
+  };
+  const data = {
+    messages: previous.messages.concat([newMessage]),
+  };
+  cache.writeQuery({ query, data });
+  return newMessage;
+};
+
 const stateLink = withClientState({
   cache,
   resolvers: {
@@ -31,32 +60,7 @@ const stateLink = withClientState({
     Mutation: {
       addMessage: async(_, { content, userId }, { cache }) => {
         const message = await addMessage({ content, userId });
-        const query = gql `
-          query {
-            messages @client {
-              id
-              content,
-              user {
-                id
-                username
-              }
-            }
-          }
-        `;
-        const previous = cache.readQuery({ query });
-        const newMessage = {
-          ...message,
-          user: {
-            ...await fetchUser(userId),
-            __typename: 'User'
-          },
-          __typename: 'Message'
-        };
-        const data = {
-          messages: previous.messages.concat([newMessage]),
-        };
-        cache.writeQuery({ query, data });
-        return newMessage;
+        return addMessageInCache({ cache, message, userId });
       }
     }
   },
@@ -68,6 +72,11 @@ const client = new ApolloClient({
 });
 
 window.__APOLLO__ = {
+  messageReceived: message => addMessageInCache({
+    message,
+    cache: client,
+    userId: message.user,
+  }),
   editUser: ({ userId, username }) => {
     const id = `User:${userId}`;
     const fragment = gql `
@@ -106,33 +115,6 @@ window.__APOLLO__ = {
       variables: { userId, content },
     });
   },
-  messageReceived: async message => {
-    const query = gql `
-      query {
-        messages @client {
-          id
-          content,
-          user {
-            id
-            username
-          }
-        }
-      }
-    `;
-    const previous = client.readQuery({ query });
-    const newMessage = {
-      ...message,
-      user: {
-        ...await fetchUser(message.user),
-        __typename: 'User'
-      },
-      __typename: 'Message'
-    };
-    const data = {
-      messages: previous.messages.concat([newMessage]),
-    };
-    client.writeQuery({ query, data });
-  }
 };
 
 export default client;

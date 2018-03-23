@@ -24,23 +24,21 @@ export const getMessages = () => async dispatch => {
   dispatch(messagesReceived(messages));
 };
 
-export const addMessage = ({ userId, content }) => async dispatch => {
-  const message = await _addMessage({ userId, content });
-  const user = await fetchUser(message.user);
+const addMessageInCache = ({ id, content, userId }) => async dispatch => {
+  const user = await fetchUser(userId);
   dispatch(messageAdded({
-    ...message,
+    id,
+    content,
     user,
   }));
 };
 
-export const messageReceived = ({ id, user, content }) => async dispatch => {
-  const _user = await fetchUser(user);
-  dispatch(messageAdded({
-    id,
-    content,
-    user: _user,
-  }));
+export const addMessage = ({ userId, content }) => async dispatch => {
+  const message = await _addMessage({ userId, content });
+  return addMessageInCache({ id: message.id, userId, content })(dispatch);
 };
+
+export const messageReceived = ({ id, user, content }) => addMessageInCache({ id, content, userId: user });
 
 const messagesReducer = handleActions({
   [messagesReceived.toString()]: (messages, action) => action.payload.messages.reduce((messages, msg) => ({
