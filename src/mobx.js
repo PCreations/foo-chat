@@ -1,133 +1,119 @@
-import { decorate, observable, action } from 'mobx';
+import { observable, action, runInAction, autorun } from 'mobx';
 import memoize from 'lodash/memoize';
 
-import { fetchUser, fetchMessages, addMessage } from './db';
+import { fetchUser as __fetchUser, fetchMessages as __fetchMessages, addMessage as __addMessage } from './db';
 
-import resolveMessages from './resolveMessages';
 
-class User {
-  id;
-  username;
-
-  constructor({ id, username }) {
-    this.id = id;
+const createUser = memoize(async({ id, username }) => observable({
+  id,
+  username,
+  setUsername(username) {
     this.username = username;
-  }
+  },
+}, {
+  setUsername: action,
+}));
 
-  editUsername(username) {
-    this.username = username;
-  }
-}
+const createMessage = memoize(async({ id, content, userId, userStore }) => observable({
+  id,
+  content,
+  user: await (userStore.resolveUser(userId)),
+}));
 
-decorate(User, {
-  username: observable,
-  editUsername: action,
+const createUserStore = ({ fetchUser }) => observable({
+  users: new Map(),
+  async resolveUser(userId) {
+    if (this.users.has(userId)) {
+      return this.users.get(userId);
+    }
+    const userRes = await fetchUser(userId);
+    const user = await createUser(userRes);
+    runInAction(() => this.users.set(user.id, user));
+    return user;
+  },
 });
 
-class Message {
-  id;
-  content;
-  user;
-
-  constructor({ id, content, user }) {
-    this.id = id;
-    this.content = content;
-    this.user = user;
-  }
-}
-
-decorate(Message, {
-  content: observable,
-  user: observable,
-});
-
-const createUser = memoize(user => new User(user));
-
-class UserStore {
-  _fetchUser;
-  users = {};
-
-  constructor({ fetchUser }) {
-    this._fetchUser = fetchUser;
-  }
-
-  async fetchUser(id) {
-    this.fetchUserSuccess(await this._fetchUser(id));
-  }
-
-  fetchUserSuccess(user) {
-    this.users[user.id] = new User(user);
-  }
-}
-
-decorate(UserStore, {
-  users: observable,
-  fetchUser: action,
-  fetchUserSuccess: action.bound,
-});
-
-class MessageStore {
-  _addMessage;
-  fetchUser;
-  messages = observable.map(new Map());
-  isLoading = observable.box(false);
-
-  constructor({ resolveMessages, fetchUser, addMessage }) {
-    this._resolveMessages = resolveMessages;
-    this.fetchUser = fetchUser;
-    this._addMessage = addMessage;
-  }
-
-  addMessageInCache({ messages, message, userId }) {
-    this.fetchUser(userId).then(action(user => {
-      messages.set(message.id, new Message({
-        id: message.id,
-        content: message.content,
-        user: createUser(user),
-      }));
+const createMessageStore = ({ createMessage, userStore, fetchMessages, saveMessage }) => observable({
+  isLoading: false,
+  messages: new Map(),
+  async messageReceived({ id, userId, content }) {
+    const message = await createMessage({ id, userId, content, userStore });
+    runInAction(() => this.messages.set(message.id, message));
+    return message;
+  },
+  async addMessage({ userId, content }) {
+    const messageRes = await saveMessage({ userId, content });
+    const message = await createMessage({ id: messageRes.id, userId, content, userStore });
+    runInAction(() => this.messages.set(message.id, message));
+    return message;
+  },
+  async fetchMessages() {
+    runInAction(() => this.isLoading = true);
+    const messagesRes = await fetchMessages();
+    const messagesEntries = await Promise.all(messagesRes.map(async msgRes => {
+      const message = await createMessage({
+        id: msgRes.id,
+        content: msgRes.content,
+        userId: msgRes.user,
+        userStore,
+      });
+      return [message.id, message];
     }));
-  }
-
-  messageReceived({ id, user, content }) {
-    this.addMessageInCache({ messages: this.messages, message: { id, content }, userId: user });
-  }
-
-  addMessage({ userId, content }) {
-    this._addMessage({ userId, content }).then(action(message => {
-      this.addMessageInCache({ messages: this.messages, message, userId });
-    }));
-  }
-
-  fetchMessages() {
-    this.isLoading.set(true);
-    this._resolveMessages().then(this.fetchMessagesSuccess);
-  }
-
-  fetchMessagesSuccess(messages) {
-    this.messages = observable.map(new Map(messages.map(msg => ([msg.id, new Message({
-      id: msg.id,
-      content: msg.content,
-      user: createUser(msg.user),
-    })]))));
-    console.log('LOADING FALSE');
-    this.isLoading.set(false);
-  }
-}
-
-decorate(MessageStore, {
-  fetchMessages: action,
-  messageReceived: action,
-  addMessage: action,
-  addMessageInCache: action,
-  fetchMessagesSuccess: action.bound,
+    runInAction(() => {
+      this.messages = new Map(messagesEntries);
+      this.isLoading = false;
+    });
+  },
 });
 
+const userStore = createUserStore({ fetchUser: __fetchUser });
+const messageStore = createMessageStore({ userStore, createMessage, fetchMessages: __fetchMessages, saveMessage: __addMessage });
 
 const stores = observable({
-  userStore: new UserStore({ fetchUser }),
-  messageStore: new MessageStore({ addMessage, fetchUser, resolveMessages: () => resolveMessages({ fetchMessages, fetchUser }) }),
+  userStore,
+  messageStore
 });
 
-window.__MOBX__ = stores;
+window.__MOBX__ = {
+  stores,
+  subscribe: next => autorun(() => next(stores)),
+  selectors: {
+    messages: stores => ({
+      messages: stores.messageStore.messages.toJS(),
+      loading: stores.messageStore.isLoading,
+    }),
+    users: stores => stores.userStore.users,
+  },
+};
+
+export const createStore = ({ fetchUser, fetchMessages, addMessage }) => {
+  const userStore = createUserStore({ fetchUser });
+  const messageStore = createMessageStore({ userStore, createMessage, fetchMessages, saveMessage: addMessage });
+
+  const stores = observable({
+    userStore,
+    messageStore,
+  });
+
+  return {
+    subscribe: next => autorun(() => next(stores)),
+    fetchMessages: () => messageStore.fetchMessages(),
+    editUsername: ({ userId, username }) => userStore.users.get(userId).setUsername(username),
+  };
+};
+
+export const messageSelector = stores => {
+  const messages = [];
+  stores.messageStore.messages.forEach(msg => messages.push({
+    ...msg,
+    user: {
+      id: msg.user.id,
+      username: msg.user.username,
+    },
+  }));
+  return messages;
+};
+
+export const areMessagesLoadingSelector = stores => stores.messageStore.isLoading;
 
 export default stores;

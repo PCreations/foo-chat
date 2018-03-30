@@ -32,12 +32,9 @@ const db = {
   },
 };
 
-export const fetchUser = userId => new Promise(resolve => setTimeout(() => {
-  const user = db.users[userId];
-  resolve(user);
-}, 500));
+export const fetchUser = userId => new Promise(resolve => setTimeout(() => resolve(db.users[userId]), 100));
 
-export const fetchMessages = () => new Promise(resolve => setTimeout(() => resolve(Object.values(db.messages)), 500));
+export const fetchMessages = () => new Promise(resolve => setTimeout(() => resolve(Object.values(db.messages)), 100));
 
 let currMsgId = 3;
 
@@ -50,7 +47,7 @@ export const addMessage = ({ userId, content }) => new Promise(resolve => setTim
   };
   db.messages[id] = message;
   resolve(message);
-}), 200);
+}), 10);
 
 
 window.__DB__ = db;

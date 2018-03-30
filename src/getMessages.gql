@@ -1,0 +1,10 @@
+query {
+  messages @client {
+    id
+    content
+    user {
+      id
+      username
+    }
+  }
+}

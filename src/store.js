@@ -24,7 +24,7 @@ export const getMessages = () => async dispatch => {
   dispatch(messagesReceived(messages));
 };
 
-const addMessageInCache = ({ id, content, userId }) => async dispatch => {
+const addMessageInCache = ({ id, content, userId, fetchUser }) => async dispatch => {
   const user = await fetchUser(userId);
   dispatch(messageAdded({
     id,
@@ -33,12 +33,17 @@ const addMessageInCache = ({ id, content, userId }) => async dispatch => {
   }));
 };
 
+const editUserInCache = ({ userId, username }) => dispatch => dispatch(usernameEdited({
+  userId,
+  username,
+}));
+
 export const addMessage = ({ userId, content }) => async dispatch => {
   const message = await _addMessage({ userId, content });
-  return addMessageInCache({ id: message.id, userId, content })(dispatch);
+  return addMessageInCache({ id: message.id, userId, content, fetchUser })(dispatch);
 };
 
-export const messageReceived = ({ id, user, content }) => addMessageInCache({ id, content, userId: user });
+export const messageReceived = ({ id, user, content }) => addMessageInCache({ id, content, userId: user, fetchUser });
 
 const messagesReducer = handleActions({
   [messagesReceived.toString()]: (messages, action) => action.payload.messages.reduce((messages, msg) => ({
@@ -104,7 +109,7 @@ export const messagesSelector = state => ({
 const store = createStore(reducer, applyMiddleware(thunk));
 
 window.__REDUX__ = {
-  editUser: ({ userId, username }) => store.dispatch(usernameEdited({ userId, username })),
+  editUser: ({ userId, username }) => editUserInCache({ userId, username })(store.dispatch),
   addMessage: ({ userId, content }) => store.dispatch(addMessage({ userId, content })),
   messageReceived: ({ id, user, content }) => store.dispatch(messageReceived({ id, user, content })),
   store,

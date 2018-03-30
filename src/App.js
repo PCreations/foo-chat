@@ -1,4 +1,5 @@
 import React, { Component } from 'react';
+import { Subject } from 'rxjs/Rx';
 import logo from './logo.svg';
 import './App.css';
 import gql from 'graphql-tag';
@@ -11,19 +12,10 @@ import { inspect } from 'util';
 import client from './client';
 import store, { getMessages } from './store';
 import stores from './mobx';
+import GET_MESSAGES from './getMessages.gql';
+import createUnstatedStore from './createUnstatedStore';
 
-const GET_MESSAGES = gql `
-  query {
-    messages @client {
-      id
-      content,
-      user {
-        id
-        username
-      }
-    }
-  }
-`;
+import { fetchMessages, fetchUser, addMessage } from './db';
 
 const withMessagesFromRedux = connect(
   state => {
@@ -41,12 +33,12 @@ const withMessagesFromRedux = connect(
   }),
 );
 
-const ReduxMessages = withMessagesFromRedux(class SmartReduxMessages extends Component {
+export const ReduxMessages = withMessagesFromRedux(class SmartReduxMessages extends Component {
   componentWillMount() {
     this.props.getMessages();
   }
   render() {
-    return this.props.children({ messages: this.props.messages, loading: this.props.loading });
+    return !(this.props.messages.length === 0 && !this.props.loading) && this.props.children({ messages: this.props.messages, loading: this.props.loading });
   }
 });
 
@@ -55,20 +47,68 @@ const MobxMessages = inject('messageStore')(observer(class MobxMessages extends 
     this.props.messageStore.fetchMessages();
   }
   render() {
-    return this.props.children({ messages: this.props.messageStore.messages, loading: this.props.messageStore.isLoading.get() });
+    const messages = [];
+    this.props.messageStore.messages.forEach(msg => {
+      messages.push({
+        id: msg.id,
+        content: msg.content,
+        user: {
+          id: msg.user.id,
+          username: msg.user.username,
+        }
+      });
+    });
+    return this.props.children({ messages, loading: this.props.messageStore.isLoading });
   }
 }));
 
-const renderMessage = messages => {
-  const li = [];
-  for (const message of messages.values()) {
-    li.push(
-      <li key={message.id}>
-        <strong>{message.user ? message.user.username : 'chargement...'}</strong> : {message.content}
-      </li>
-    );
-  }
-  return li;
+const ApolloMessages = ({ children }) => (
+  <Query
+    query={GET_MESSAGES}
+    ssr={false}
+  >
+    {({ data, loading, error }) => {
+      return children({ messages: data.messages || [], loading });
+    }}
+  </Query>
+);
+
+const unstatedMessageSubject$ = new Subject();
+
+const { MessageListState: UnstatedMessages, addMessage: addUnstatedMessage, editUsername } = createUnstatedStore({
+  fetchMessages: () => fetchMessages().then(messages => messages.map(({ user, ...msg }) => ({
+    ...msg,
+    userId: user,
+  }))),
+  addMessage,
+  fetchUser,
+  receivedMessage$: unstatedMessageSubject$,
+});
+
+window.__UNSTATED__ = {
+  addMessage: addUnstatedMessage,
+  editUsername,
+  messageReceived: unstatedMessageSubject$.next.bind(unstatedMessageSubject$),
+};
+
+const renderMessageList = title => ({ messages, loading }) => {
+  return (
+    loading ? <p>Chargement...</p> : (
+      <div className="App">
+        <header className="App-header">
+          <img src={logo} className="App-logo" alt="logo" />
+          <h1 className="App-title">{title}</h1>
+        </header>
+        <ul>
+          {messages.map(message => (
+            <li key={message.id}>
+              <strong>{message.user ? message.user.username : 'chargement...'}</strong> : {message.content}
+            </li>
+          ))}
+        </ul>
+      </div>
+    )
+  );
 };
 
 
@@ -76,76 +116,31 @@ class App extends Component {
   render() {
     return (
       <div>
-        <div style={{ width: '30%', display:'inline-block' }}>
+        <div style={{ width: '24%', display:'inline-block' }}>
           <ApolloProvider client={client}>
-            <Query
-              query={GET_MESSAGES}
-              ssr={false}
-            >
-              {({ data, loading, error }) => {
-                return error ? <p style={{ color: 'red' }}>{inspect(error)}</p> : (loading ? <p>Chargement...</p> : (
-                  <div className="App">
-                    <header className="App-header">
-                      <img src={logo} className="App-logo" alt="logo" />
-                      <h1 className="App-title">Apollo link state</h1>
-                    </header>
-                    <ul>
-                      {data.messages.map(message => (
-                        <li key={message.id}>
-                          <strong>{message.user.username}</strong> : {message.content}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ));
-              }}
-            </Query>
+            <ApolloMessages>
+              {renderMessageList('Apollo link State')}
+            </ApolloMessages>
           </ApolloProvider>
         </div>
-        <div style={{ width: '30%', display: 'inline-block' }}>
+        <div style={{ width: '24%', display: 'inline-block' }}>
           <Provider store={store}>
             <ReduxMessages>
-              {({ messages, loading }) => (
-                loading ? <p>Chargement...</p> : (
-                  <div className="App">
-                    <header className="App-header">
-                      <img src={logo} className="App-logo" alt="logo" />
-                      <h1 className="App-title">Redux</h1>
-                    </header>
-                    <ul>
-                      {messages.map(message => (
-                        <li key={message.id}>
-                          <strong>{message.user ? message.user.username : 'chargement...'}</strong> : {message.content}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )
-              )}
+              {renderMessageList('Redux')}
             </ReduxMessages>
           </Provider>
         </div>
-        <div style={{ width: '30%', display: 'inline-block' }}>
+        <div style={{ width: '24%', display: 'inline-block' }}>
           <MobxProvider {...stores}>
-            <div>
-              <MobxMessages>
-                {({ messages, loading }) => (
-                  loading ? <p>Chargement...</p> : (
-                    <div className="App">
-                      <header className="App-header">
-                        <img src={logo} className="App-logo" alt="logo" />
-                        <h1 className="App-title">Mobx</h1>
-                      </header>
-                      <ul>
-                        {renderMessage(messages)}
-                      </ul>
-                    </div>
-                  )
-                )}
-              </MobxMessages>
-              <DevTools />
-            </div>
+            <MobxMessages>
+              {renderMessageList('Mobx')}
+            </MobxMessages>
           </MobxProvider>
+        </div>
+        <div style={{ width: '24%', display: 'inline-block' }}>
+          <UnstatedMessages>
+            {renderMessageList('Unstated')}
+          </UnstatedMessages>
         </div>
       </div>
     );

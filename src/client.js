@@ -7,7 +7,7 @@ import { fetchUser, fetchMessages, addMessage } from './db';
 
 const cache = new InMemoryCache();
 
-const addMessageInCache = async({ cache, message, userId }) => {
+const addMessageInCache = async({ cache, message, userId, fetchUser }) => {
   const query = gql `
     query {
       messages @client {
@@ -36,6 +36,28 @@ const addMessageInCache = async({ cache, message, userId }) => {
   return newMessage;
 };
 
+const editUserInCache = ({ cache, userId, username }) => {
+  const id = `User:${userId}`;
+  const fragment = gql `
+    fragment user on User {
+      username
+    }
+  `;
+  const user = cache.readFragment({ fragment, id });
+  console.log('existing user', user);
+  const data = {
+    ...user,
+    username,
+    __typename: 'User',
+  };
+  cache.writeFragment({
+    fragment,
+    id,
+    data,
+  });
+  return data;
+};
+
 const stateLink = withClientState({
   cache,
   resolvers: {
@@ -60,7 +82,7 @@ const stateLink = withClientState({
     Mutation: {
       addMessage: async(_, { content, userId }, { cache }) => {
         const message = await addMessage({ content, userId });
-        return addMessageInCache({ cache, message, userId });
+        return addMessageInCache({ cache, message, userId, fetchUser });
       }
     }
   },
@@ -76,26 +98,10 @@ window.__APOLLO__ = {
     message,
     cache: client,
     userId: message.user,
+    fetchUser,
   }),
   editUser: ({ userId, username }) => {
-    const id = `User:${userId}`;
-    const fragment = gql `
-      fragment user on User {
-        username
-      }
-    `;
-    const user = client.readFragment({ fragment, id });
-    console.log('existing user', user);
-    const data = {
-      ...user,
-      username,
-      __typename: 'User',
-    };
-    client.writeFragment({
-      fragment,
-      id,
-      data,
-    });
+    return editUserInCache({ cache: client, userId, username });
   },
   addMessage: ({ userId, content }) => {
     const mutation = gql `
